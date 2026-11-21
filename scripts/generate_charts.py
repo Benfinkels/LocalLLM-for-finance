@@ -20,17 +20,19 @@ TIER_ORDER = [
     "nemotron_4090",
     "minimax_m27",
     "gemini_flash",
+    "gemini_4_carbon",
     "hybrid",
 ]
 
 TIER_LABELS = {
-    "deterministic": "Deterministic\nPython",
+    "deterministic": "Plain Python\n(CPU)",
     "phi4_mini": "Phi-4 Mini\n(GTX 1080 8GB)",
     "gemma4_e2b": "Gemma 4 E2B\n(RTX 2080 8GB)",
     "nemotron_4090": "Nemotron 74B\n(RTX 4090 24GB)",
     "minimax_m27": "MiniMax-M2.7\n(Cloud API)",
     "gemini_flash": "Gemini 3 Flash\n(Cloud API)",
-    "hybrid": "Hybrid Router\n(Code+SLM+Cloud)",
+    "gemini_4_carbon": "Gemini 4 Carbon\n(Frontier API)",
+    "hybrid": "Hybrid Blend\n(Python+Local+Cloud)",
 }
 
 TIER_COLORS = {
@@ -40,14 +42,15 @@ TIER_COLORS = {
     "nemotron_4090": "#8b5cf6",
     "minimax_m27": "#f59e0b",
     "gemini_flash": "#ef4444",
+    "gemini_4_carbon": "#db2777",
     "hybrid": "#06b6d4",
 }
 
 TASK_ORDER = ["log_triage", "finance_reconcile", "note_to_json", "doc_contradictions"]
 TASK_LABELS = {
-    "log_triage": "1. Noisy Log\nTriage (~10k tok)",
-    "finance_reconcile": "2. Spend-to-GL\nReconciliation",
-    "note_to_json": "3. Short Note\n-> Strict JSON",
+    "log_triage": "1. Noisy Logs\n(~10k tok)",
+    "finance_reconcile": "2. Table Matching\n& Dollar Math",
+    "note_to_json": "3. Messy Note\n-> JSON",
     "doc_contradictions": "4. Multi-Doc\nContradictions",
 }
 
@@ -92,8 +95,8 @@ def plot_task_heatmap(summary: dict[str, Any], out_path: Path) -> None:
             ax.text(j, i, f"{val:.1f}%", ha="center", va="center", color=txt_color, fontsize=11, fontweight="bold")
 
     cbar = fig.colorbar(im, ax=ax, fraction=0.035, pad=0.03)
-    cbar.set_label("Deterministic Ground-Truth Score (%)", fontsize=9)
-    ax.set_title("When Not to Use an LLM: Accuracy Matrix by Task Archetype × Compute Tier", fontsize=12.5, fontweight="bold", pad=14)
+    cbar.set_label("Exact Accuracy Score (%)", fontsize=9)
+    ax.set_title("When Not to Use an LLM: Accuracy Across Code, Local GPUs, Cloud & Hybrid", fontsize=12.2, fontweight="bold", pad=14)
     fig.tight_layout()
     fig.savefig(out_path, bbox_inches="tight")
     plt.close(fig)
@@ -112,9 +115,10 @@ def plot_finops_pareto(summary: dict[str, Any], out_path: Path) -> None:
         "phi4_mini": (10, -4),
         "gemma4_e2b": (10, -4),
         "nemotron_4090": (10, -4),
-        "hybrid": (-128, -4),
-        "minimax_m27": (-118, -28),
-        "gemini_flash": (10, -8),
+        "hybrid": (-135, -4),
+        "minimax_m27": (-118, -32),
+        "gemini_flash": (10, -24),
+        "gemini_4_carbon": (-138, 12),
     }
 
     for t in tiers:
@@ -185,11 +189,12 @@ def plot_cliffs(summary: dict[str, Any], infra: dict[str, Any] | None, out_path:
 
     # Small visual offsets so coincident 100% / 0% lines remain clearly distinguishable
     line_styles = {
-        "deterministic": ("-", 2.4, 1.5),
-        "nemotron_4090": ("--", 2.0, 0.5),
-        "minimax_m27": ("-.", 2.0, -0.5),
-        "gemini_flash": (":", 2.2, -1.5),
-        "hybrid": ("-", 2.4, 2.5),
+        "deterministic": ("-", 2.4, 2.0),
+        "nemotron_4090": ("--", 2.0, 1.0),
+        "minimax_m27": ("-.", 2.0, 0.0),
+        "gemini_flash": (":", 2.2, -1.0),
+        "gemini_4_carbon": ("--", 2.2, -2.0),
+        "hybrid": ("-", 2.4, 3.0),
         "phi4_mini": ("--", 2.4, -1.2),
         "gemma4_e2b": ("-", 2.4, 1.2),
     }

@@ -10,7 +10,7 @@ I've been trying to move more of my AI workflows onto local models running on my
 
 Most AI benchmarks only compare one model against another. They don't answer the practical question: **how should regular code, small local models, and cloud APIs actually work together?**
 
-This repo tests **4 everyday tasks** across plain Python, local GPUs (`GTX 1080 8GB`, `RTX 2080 8GB`, `RTX 4090 24GB`), cloud APIs (`MiniMax-M2.7`, `Gemini 3 Flash`), and a **hybrid blend** where Python and AI split the job—measuring exact accuracy, speed, and estimated cost per 10,000 runs.
+This repo tests **4 everyday tasks** across plain Python, local GPUs (`GTX 1080 8GB`, `RTX 2080 8GB`, `RTX 4090 24GB`), three cloud APIs (`MiniMax-M2.7`, `Gemini 3 Flash`, and flagship `Gemini 4 Carbon`), and a **hybrid blend** where Python and AI split the job—measuring exact accuracy, speed, and estimated cost per 10,000 runs.
 
 ## When You'd Use This Repo
 
@@ -20,10 +20,11 @@ This repo tests **4 everyday tasks** across plain Python, local GPUs (`GTX 1080 
 
 ---
 
-## What Happened (`329` Live Test Runs, Exact Ground-Truth Scoring)
+## What Happened (`376` Live Test Runs, Exact Ground-Truth Scoring)
 
-- **The hybrid blend beat every single cloud model on accuracy (`99.2%` vs. `94.2%` MiniMax-M2.7 and `93.8%` Gemini 3 Flash)** while cutting estimated cloud API cost by **`87%`** (`$21.51` down to `$2.76` per 10,000 runs) and cutting input tokens by **`88%`**.
-- **AI should match messy text; code should do the math.** On a 36-row table comparison with messy vendor names and dollar differences, even `Gemini 3 Flash` found every individual discrepancy yet missed the overall net total by **`$8,376–$16,247` on 5 out of 5 runs**. Using an 8GB local model (`Gemma 4 E2B`, `~160` tokens, `$0`) *only* to map the 6 messy vendor names—and letting Python do the math—jumped accuracy from **`4.8%` to `100.0%`**.
+- **A flagship frontier model (`Gemini 4 Carbon`) *can* score `100.0%` on everything—at `6.4 s` median (`32.6 s` p95) and `$244.43` per 10,000 runs.**
+- **The Hybrid Blend (`Python + 8GB Gemma 4 + Cloud`) hit `99.2%` accuracy (`100%` on logs, table math, and multi-doc contradictions) at `1.2 s` median and `$2.76` per 10,000 runs—`89x` cheaper (`-98.9%`) and `5.2x` faster than Gemini 4 Carbon**, while beating both `MiniMax-M2.7` (`94.2%`) and `Gemini 3 Flash` (`93.8%`) outright.
+- **AI should match messy text; code should do the math.** On a 36-row table comparison with messy vendor names and dollar differences, `Gemini 3 Flash` caught every individual discrepancy yet missed the overall net total by **`$8,376–$16,247` on 5/5 runs**, and `Gemini 4 Carbon` needed **`15.5 s` median** of reasoning tokens to get `100%`. Using an 8GB local model (`Gemma 4 E2B`, `~160` tokens, `$0`) *only* to map the 6 messy vendor names—and letting Python do the math—hit **`100.0%` in `3.2 s` at `$0` API cost**.
 - **Small 8GB local models are genuinely useful—just keep inputs short.** On short messy notes (`<200` tokens), `Gemma 4 E2B` hit **`97.0%`** for free (where regex fell apart at `34.0%`). Once inputs grew past ~1,500–4,000 tokens, recall dropped straight from **`100%` to `0%`**.
 
 ![Accuracy Matrix by Task and Compute Tier](docs/charts/task_accuracy_heatmap.png)
@@ -42,9 +43,10 @@ Every test uses seeded synthetic data (`47` test cases per tier) with exact prog
 | **Nemotron 74B** *(RTX 4090 24GB)* | `55.2%` *(109 s, 2 TO)* | `41.3%` *(2.5 s)* | **`99.0%`** *(0.79 s)* | **`97.8%`** *(5.5 s)* | `73.3%` | 2.5 / 109.4 s | `$0.68`* |
 | **MiniMax-M2.7** *(Cloud API)* | **100.0%** *(2.8 s)* | `79.8%` *(8.7 s)* | **`99.0%`** *(0.90 s)* | **`97.8%`** *(4.3 s)* | `94.2%` | 1.4 / 8.8 s | `$12.36` |
 | **Gemini 3 Flash** *(Cloud API)* | **100.0%** *(1.7 s)* | `75.0%` *(1.3 s)* | **100.0%** *(0.78 s)* | **100.0%** *(1.8 s)* | `93.8%` | **1.1 / 1.8 s** | `$21.51` |
+| **Gemini 4 Carbon** *(Frontier API)* | **100.0%** *(19.9 s)* | **100.0%** *(15.5 s)* | **100.0%** *(3.7 s)* | **100.0%** *(12.5 s)* | **100.0%** | 6.4 / 32.6 s | `$244.43` |
 | **Hybrid Blend** *(Python + Gemma 4 + Cloud)* | **100.0%** *(0.4 ms)* | **100.0%** *(3.2 s)* | **`97.0%`** *(2.3 s)* | **100.0%** *(1.8 s)* | **`99.2%`** | 1.2 / 4.2 s | **`$2.76`** |
 
-*\*Local GPU costs estimate electricity (`$0.15/kWh × GPU power × active time`), with `$0.00` in API fees. Cloud costs use published per-million token rates (`MiniMax-M2.7`: `$0.30/$1.20`; `Gemini 3 Flash`: `$0.50/$3.00`) on measured token counts.*
+*\*Local GPU costs estimate electricity (`$0.15/kWh × GPU power × active time`), with `$0.00` in API fees. Cloud costs use published standard per-million token rates (`MiniMax-M2.7`: `$0.30/$1.20`; `Gemini 3 Flash`: `$0.50/$3.00`; `Gemini 4 Carbon`: `$4.00/$20.00` standard / `$2.00/$10.00` Nov promo) on measured token counts.*
 
 ![Accuracy vs. Cost and Latency Distribution](docs/charts/finops_pareto.png)
 
@@ -55,7 +57,7 @@ Every test uses seeded synthetic data (`47` test cases per tier) with exact prog
 ### 1. Split Messy Text and Exact Math Between AI and Code
 Task 2 (`finance_reconcile`) compares two 18-row spend tables where vendor names don't match cleanly (`"GOOG_YT_BRND"` vs `"Alphabet / YouTube Brand Awareness"`, `"TTK_CRTR_US"` vs `"ByteDance TikTok Creator Marketplace"`) and 3 cent-exact issues are hidden (a dollar mismatch, a duplicate booking, and a missing entry).
 - **Plain Python (`75.9%`):** Gets every calculation right, but simple string matching misses unfamiliar abbreviations.
-- **Standalone LLMs (`3.2%–79.8%`):** `Nemotron 74B` scored **`41.3%`**. `Gemini 3 Flash` caught all 3 individual issues on every run, yet still missed the overall net dollar difference by **`$8,376` to `$16,247` on 5/5 runs**.
+- **Standalone LLMs (`3.2%–100.0%`):** `Nemotron 74B` scored **`41.3%`**. `Gemini 3 Flash` caught all 3 individual issues on every run, yet still missed the overall net dollar difference by **`$8,376` to `$16,247` on 5/5 runs**. Flagship `Gemini 4 Carbon` *did* hit `100.0%`, but needed **`15.5 s` median** and heavy reasoning tokens to do it.
 - **Hybrid (`100.0%`):** Sends **only the 6 unique vendor names (`~160` tokens)** to `Gemma 4 E2B` to line them up, then runs Python to add, deduplicate, and compare the numbers. Accuracy jumps from **`4.8%` to `100.0%`** with `$0` in API fees.
 
 ### 2. Don't Throw AI at Structured Logs

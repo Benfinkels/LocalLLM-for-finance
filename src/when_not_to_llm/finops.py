@@ -63,6 +63,13 @@ PRICING_CATALOG: dict[str, TierPricing] = {
         input_per_1m_usd=0.50,
         output_per_1m_usd=3.00,
     ),
+    "gemini_4_carbon": TierPricing(
+        tier_id="gemini_4_carbon",
+        display_name="Gemini 4 Carbon (Frontier API)",
+        category="cloud_api",
+        input_per_1m_usd=4.00,
+        output_per_1m_usd=20.00,
+    ),
     "hybrid": TierPricing(
         tier_id="hybrid",
         display_name="Hybrid (Code + Gemma4 + Cloud)",
