@@ -4,9 +4,27 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Most AI benchmarks compare LLM A against LLM B. Almost none benchmark **Tier -1 (Deterministic Code)** vs. **8GB Local SLMs** vs. **24GB Workstation MoE** vs. **Cloud APIs** vs. **Hybrid Pipelines** on the *same* operational tasks—scored simultaneously on **exact ground-truth accuracy, wall-clock latency, and FinOps cost per 10,000 tasks**.
+Most AI benchmarks compare LLM A against LLM B. That answers the wrong question for production teams.
 
-Across **329 live evaluated runs** (7 compute tiers × 47 deterministic test cases, zero LLM-as-a-Judge):
+## The Problem This Solves
+
+Teams adding AI to finance, marketing analytics, and operations workflows repeatedly hit **two expensive failure modes**:
+
+1. **The "LLM Everything" Trap (Cloud Over-Spend + Silent Math Errors):** Wrapping an entire workflow in a frontier cloud API burns token budget on tasks plain code solves in `<1 ms`, while silently introducing arithmetic errors on financial tables (`$8k–$16k` bottom-line variance misses even when every individual anomaly is found).
+2. **The "Cheap Local Swap" Trap (Silent Context & Latency Cliffs):** Trying to cut API costs by dropping a small 8GB local model across the same pipeline hits silent prompt-truncation cliffs (`100% -> 0%` recall past default `num_ctx`) and `10–11x` reload latency spikes—causing teams to falsely conclude that local models are unusable.
+
+**What this repo solves for:** `when-not-to-llm` is a **reproducible FinOps evaluation harness and hybrid routing reference** that benchmarks **Tier -1 (Deterministic Code)** alongside **8GB Local SLMs**, **24GB Local MoE**, **Cloud APIs**, and **Hybrid (`SLM fuzzy step -> deterministic math`)** on the *same* tasks—scoring exact ground-truth accuracy, p50/p95 latency, and unit cost per 10,000 runs so you can decide *empirically* where code stops and LLMs start.
+
+## When You Would Use This
+
+- **Before shipping an AI automation (Architecture & FinOps Gate):** You are scoping a finance, analytics, or ops pipeline (reconciling spend tables, triaging logs, structuring messy CRM notes, auditing contracts) and need hard numbers to justify what stays in Python/SQL, what runs on a local GPU, and what earns paid cloud API spend.
+- **When an existing LLM pipeline hallucinates numbers or costs too much:** Use the deterministic verifier pattern (`src/when_not_to_llm/verifiers.py`) and the Task 2 Hybrid split (`SLM resolves fuzzy labels -> Python runs exact math`) to eliminate numeric drift while cutting token volume by 80%+.
+- **Before self-hosting local models on Ollama:** Run Track 5A (`context_cliff`) and Track 5B (`infra_cliff.py`) against your own GPU to measure your exact token-recall ceiling and catch `keep_alive=0` / `num_ctx` reload cliffs before production.
+
+---
+
+## Headline Results (`329` Live Evaluated Runs, Zero LLM-as-a-Judge)
+
 - **A simple Hybrid Router (`Code + 8GB Local SLM + Cloud`) beat every standalone model** (**`99.2%`** macro accuracy vs. **`94.2%`** MiniMax-M2.7 and **`93.8%`** Gemini 3 Flash) while cutting Cloud API cost by **`-87.2%`** (**`$21.51 -> $2.76` per 10k tasks**) and input tokens by **`-88.1%`**.
 - **Every standalone LLM failed exact financial reconciliation (`3.2%–79.8%`):** Even Gemini 3 Flash found `100%` of individual anomalies yet missed the bottom-line ledger variance by **`$8,376–$16,247` on 5/5 reports**. Splitting the job—`Gemma 4 E2B` maps 6 fuzzy vendor names (`~160` tokens) -> Python executes cent-exact math—jumped accuracy to **`100.0%`**.
 - **8GB Local SLMs hit a hard step-function cliff past 1,500–4,000 tokens (`100% -> 0%`)**, yet **`Gemma 4 E2B` scored `97.0%`** on short unstructured notes (`<200` tokens) at `$0` API cost—nearly triple deterministic regex (`34.0%`).
