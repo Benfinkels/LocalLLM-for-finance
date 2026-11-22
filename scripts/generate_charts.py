@@ -117,16 +117,16 @@ def plot_finops_pareto(summary: dict[str, Any], out_path: Path) -> None:
 
     # Custom offsets to guarantee zero label overlap on the log-scale scatter
     offsets = {
-        "deterministic": (10, -4),
+        "deterministic": (10, 6),
         "phi4_mini": (10, -4),
         "gemma4_e2b": (10, -4),
         "nemotron_4090": (10, -4),
-        "hybrid": (-138, -2),
-        "minimax_m27": (-118, -32),
-        "gemini_flash": (10, -28),
-        "gemini_4_hydrogen": (10, 8),
-        "gemini_4_neon": (-135, -36),
-        "gemini_4_carbon": (-135, 14),
+        "hybrid": (-140, 2),
+        "minimax_m27": (-108, -42),
+        "gemini_flash": (10, -44),
+        "gemini_4_hydrogen": (-88, 22),
+        "gemini_4_carbon": (10, 22),
+        "gemini_4_neon": (14, -18),
     }
 
     for t in tiers:
@@ -149,14 +149,14 @@ def plot_finops_pareto(summary: dict[str, Any], out_path: Path) -> None:
             (cost_10k, acc),
             textcoords="offset points",
             xytext=(dx, dy),
-            fontsize=8.4,
+            fontsize=8.2,
             fontweight="semibold",
-            arrowprops={"arrowstyle": "-", "color": "#64748b", "lw": 0.8} if abs(dx) > 50 else None,
+            arrowprops={"arrowstyle": "-", "color": "#64748b", "lw": 0.8} if (abs(dx) > 40 or abs(dy) > 15) else None,
         )
 
     ax1.set_xscale("log")
-    ax1.set_xlim(0.003, max(350.0, max(float(summary[t]["cost_per_10k_tasks_usd"]) for t in tiers) * 14.0))
-    ax1.set_ylim(0, 110)
+    ax1.set_xlim(0.003, max(12000.0, max(float(summary[t]["cost_per_10k_tasks_usd"]) for t in tiers) * 40.0))
+    ax1.set_ylim(0, 120)
     ax1.set_xlabel("Estimated Total Cost per 10,000 Tasks (USD, log scale; local = GPU electricity)", fontsize=9.2)
     ax1.set_ylabel("Macro Core Accuracy Across 4 Tasks (%)", fontsize=9.5)
     ax1.set_title("FinOps Pareto Frontier: Accuracy vs. Unit Cost", fontsize=11.5, fontweight="bold")

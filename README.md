@@ -10,7 +10,7 @@ I've been trying to move more of my AI workflows onto local models running on my
 
 Most AI benchmarks only compare one model against another. They don't answer the practical question: **how should regular code, small local models, and cloud APIs actually work together?**
 
-This repo tests **4 everyday tasks** across plain Python, local GPUs (`GTX 1080 8GB`, `RTX 2080 8GB`, `RTX 4090 24GB`), three cloud APIs (`MiniMax-M2.7`, `Gemini 3 Flash`, and flagship `Gemini 4 Carbon`), and a **hybrid blend** where Python and AI split the job—measuring exact accuracy, speed, and estimated cost per 10,000 runs.
+This repo tests **4 everyday tasks** across plain Python, local GPUs (`GTX 1080 8GB`, `RTX 2080 8GB`, `RTX 4090 24GB`), five cloud APIs (`MiniMax-M2.7`, `Gemini 3 Flash`, and the full Gemini 4 lineup: `Hydrogen`, `Neon`, and `Carbon`), and a **hybrid blend** where Python and AI split the job—measuring exact accuracy, speed, and estimated cost per 10,000 runs.
 
 ## When You'd Use This Repo
 
@@ -20,13 +20,13 @@ This repo tests **4 everyday tasks** across plain Python, local GPUs (`GTX 1080 
 
 ---
 
-## What Happened (`376` Live Test Runs, Exact Ground-Truth Scoring)
+## What Happened (`470` Live Test Runs Across 10 Setups, Exact Ground-Truth Scoring)
 
-- **Flagship `Gemini 4 Carbon` scored `100.0%` across every single task—at `6.4 s` median (`32.6 s` p95) and `$244.43` per 10,000 runs.**
-- **The Hybrid Blend (`Python + 8GB Gemma 4 + Cloud tie-breaker`) matched that exact `100.0%` (`47/47`) at `1.1 s` median and `$2.86` per 10,000 runs—`85x` cheaper (`-98.8%`) and `5.9x` faster than Gemini 4 Carbon.**
+- **All three Gemini 4 models (`Hydrogen`, `Carbon`, `Neon`) hit a perfect `100.0%` (`47/47`)**—at **`3.4–7.5 s` median (`10–35 s` p95)** and **`$120.81–$330.03` per 10,000 runs** (Neon actually ran pricier than Carbon under default reasoning because it spent `70.9k` thinking+output tokens vs. Carbon's `24.9k`).
+- **The Hybrid Blend (`Python + 8GB Gemma 4 + Cloud tie-breaker`) matched that exact `100.0%` (`47/47`) at `1.1 s` median (`3.2 s` p95) and `$2.86` per 10,000 runs**—**`42x` cheaper than Hydrogen, `85x` cheaper than Carbon, `115x` cheaper than Neon**, and **`3x–7x` faster** than all three.
 - **How Code and Local AI hit `100.0%` together:**
-  - *Tables + math:* An 8GB local model (`Gemma 4 E2B`, `~160` tokens, `$0`) maps only the 6 messy vendor names, then Python runs exact math -> **`100.0%` in `3.2 s` at `$0` API cost** (vs. `Gemini 3 Flash` missing the net total by `$8k–$16k` on 5/5 runs, and `Gemini 4 Carbon` taking `15.5 s` median).
-  - *Short messy notes:* Both Plain Python (`76.0%` in `0.03 ms`) and `Gemma 4 E2B` (`97.0%` in `1.1 s`) run for `$0` API cost. When they agree on the amount, category, and follow-up flag (`17/20` notes = `85%`), we accept the local answer; *only* the `3/20` disagreements escalate to Cloud as a tie-breaker -> **`100.0%`**!
+  - *Tables + math:* An 8GB local model (`Gemma 4 E2B`, `~160` tokens, `$0`) maps only the 6 messy vendor names, then Python runs exact math → **`100.0%` in `3.2 s` at `$0` API cost** (vs. `Gemini 3 Flash` missing the net total by `$8k–$16k` on 5/5 runs, and Gemini 4 taking `9.5–32.9 s` median).
+  - *Short messy notes:* Plain Python (`76.0%` in `0.03 ms`) and `Gemma 4 E2B` (`97.0%` in `1.1 s`) both run locally for `$0` API cost. When they agree on the amount, category, and follow-up flag (`17/20` notes = `85%`), we keep the local answer; *only* the `3/20` disagreements escalate to Cloud as a tie-breaker → **`100.0%`**.
 - **Small 8GB local models are genuinely useful—just keep inputs short.** Once inputs grew past ~1,500–4,000 tokens, recall dropped straight from **`100%` to `0%`**.
 
 ![Accuracy Matrix by Task and Compute Tier](docs/charts/task_accuracy_heatmap.png)
@@ -39,16 +39,18 @@ Every test uses seeded synthetic data (`47` test cases per tier) with exact prog
 
 | Setup | 1. Noisy Logs (~10k tok) | 2. Table Matching & Math | 3. Messy Note → JSON | 4. Multi-Doc Contradictions | **Overall Average** | Median / p95 Speed | **Est. Cost / 10k Runs** |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Plain Python (CPU)** | **100.0%** *(0.3 ms)* | `75.9%` *(0.2 ms)* | `76.0%` *(0.03 ms)* | `81.9%` *(0.3 ms)* | `83.5%` | **0.03 / 0.30 ms** | **`$0.00`** |
+| **Plain Python (CPU)** | **100.0%** *(0.3 ms)* | `75.9%` *(0.2 ms)* | `76.0%` *(0.03 ms)* | `81.9%` *(0.3 ms)* | `83.5%` | **0.02 / 0.35 ms** | **`$0.00`** |
 | **Phi-4 Mini 3.8B** *(GTX 1080 8GB)* | `0.0%` *(15.7 s)* | `3.2%` *(6.9 s)* | `77.0%` *(2.7 s)* | `6.7%` *(11.5 s)* | `21.7%` | 6.9 / 180.1 s | `$0.36`* |
 | **Gemma 4 E2B** *(RTX 2080 8GB)* | `0.0%` *(23.3 s)* | `4.8%` *(22.2 s)* | **`97.0%`** *(1.1 s)* | `56.4%` *(14.1 s)* | `39.6%` | 12.1 / 34.3 s | `$0.92`* |
 | **Nemotron 74B** *(RTX 4090 24GB)* | `55.2%` *(109 s, 2 TO)* | `41.3%` *(2.5 s)* | **`99.0%`** *(0.79 s)* | **`97.8%`** *(5.5 s)* | `73.3%` | 2.5 / 109.4 s | `$0.68`* |
 | **MiniMax-M2.7** *(Cloud API)* | **100.0%** *(2.8 s)* | `79.8%` *(8.7 s)* | **`99.0%`** *(0.90 s)* | **`97.8%`** *(4.3 s)* | `94.2%` | 1.4 / 8.8 s | `$12.36` |
 | **Gemini 3 Flash** *(Cloud API)* | **100.0%** *(1.7 s)* | `75.0%` *(1.3 s)* | **100.0%** *(0.78 s)* | **100.0%** *(1.8 s)* | `93.8%` | **1.1 / 1.8 s** | `$21.51` |
+| **Gemini 4 Hydrogen** *(Cloud API)* | **100.0%** *(8.3 s)* | **100.0%** *(9.5 s)* | **100.0%** *(2.5 s)* | **100.0%** *(4.9 s)* | **100.0%** | 3.4 / 10.0 s | `$120.81` |
 | **Gemini 4 Carbon** *(Frontier API)* | **100.0%** *(19.9 s)* | **100.0%** *(15.5 s)* | **100.0%** *(3.7 s)* | **100.0%** *(12.5 s)* | **100.0%** | 6.4 / 32.6 s | `$244.43` |
-| **Hybrid Blend** *(Python + Gemma 4 + Cloud)* | **100.0%** *(0.4 ms)* | **100.0%** *(3.2 s)* | **100.0%** *(1.3 s)* | **100.0%** *(1.8 s)* | **100.0%** | **1.1 / 4.2 s** | **`$2.86`** |
+| **Gemini 4 Neon** *(Frontier API)* | **100.0%** *(25.2 s)* | **100.0%** *(32.9 s)* | **100.0%** *(6.0 s)* | **100.0%** *(17.3 s)* | **100.0%** | 7.5 / 35.3 s | `$330.03` |
+| **Hybrid Blend** *(Python + Gemma 4 + Cloud)* | **100.0%** *(0.4 ms)* | **100.0%** *(3.2 s)* | **100.0%** *(1.1 s)* | **100.0%** *(1.8 s)* | **100.0%** | **1.1 / 3.2 s** | **`$2.86`** |
 
-*\*Local GPU costs estimate electricity (`$0.15/kWh × GPU power × active time`), with `$0.00` in API fees. Cloud costs use published standard per-million token rates (`MiniMax-M2.7`: `$0.30/$1.20`; `Gemini 3 Flash`: `$0.50/$3.00`; `Gemini 4 Carbon`: `$4.00/$20.00` standard / `$2.00/$10.00` Nov promo) on measured token counts.*
+*\*Local GPU costs estimate electricity (`$0.15/kWh × GPU power × active time`), with `$0.00` in API fees. Cloud costs apply published standard per-million token rates (`MiniMax-M2.7`: `$0.30/$1.20`; `Gemini 3 Flash`: `$0.50/$3.00`; `Gemini 4 Hydrogen`: `$1.50/$7.50`; `Gemini 4 Neon`: `$3.00/$15.00`; `Gemini 4 Carbon`: `$4.00/$20.00` standard / `$2.00/$10.00` Nov promo) to exact measured token counts.*
 
 ![Accuracy vs. Cost and Latency Distribution](docs/charts/finops_pareto.png)
 
