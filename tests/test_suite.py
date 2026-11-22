@@ -15,7 +15,13 @@ from when_not_to_llm.datasets import (
 )
 from when_not_to_llm.finops import compute_call_cost_usd, sanitize_telemetry
 from when_not_to_llm.runner import estimate_dry_run, summarize_results
-from when_not_to_llm.tiers import TierResult, reconcile_tables_exact, run_deterministic, run_hybrid
+from when_not_to_llm.tiers import (
+    TierResult,
+    parse_english_amount,
+    reconcile_tables_exact,
+    run_deterministic,
+    run_hybrid,
+)
 from when_not_to_llm.verifiers import extract_json_object, score_case
 
 
@@ -167,12 +173,39 @@ def test_dry_run_and_summarize() -> None:
     assert summary["deterministic"]["macro_core_accuracy"] == 1.0
 
 
+def test_parse_english_amount_and_hybrid_note_escalation() -> None:
+    assert parse_english_amount("renew at four point two grand") == 4200.0
+    assert parse_english_amount("paid the half-a-grand setup fee") == 500.0
+    assert parse_english_amount("roughly eighteen fifty a month") == 1850.0
+    assert parse_english_amount("five and a half grand contract") == 5500.0
+    assert parse_english_amount("twelve hundred bucks") == 1200.0
+    assert parse_english_amount("free zero-dollar trial") == 0.0
+
+    # Verify Hybrid escalates when local SLM disagrees with deterministic currency parser
+    case = generate_note_to_json_cases()[12]  # note_to_json_13 ("half-a-grand" = 500.0)
+    bad_slm_obj = dict(case.ground_truth, amount_usd=5000.0)
+    slm = lambda s, u: TierResult(json.dumps(bad_slm_obj), 250.0, 150, 50, routed_to="gemma4_e2b")
+    cloud = lambda s, u: TierResult(json.dumps(case.ground_truth), 800.0, 150, 50, cost_usd=0.0002, routed_to="gemini_flash")
+    res = run_hybrid(case, slm, cloud)
+    assert "escalate" in res.routed_to
+    assert score_case("note_to_json", res.raw_output, case.ground_truth)["score"] == 1.0
+
+
 def test_committed_results_have_no_private_ips() -> None:
-    res_dir = Path(__file__).resolve().parents[1] / "results"
-    if not res_dir.exists():
-        return
-    for jf in res_dir.glob("*.json"):
-        txt = jf.read_text(encoding="utf-8")
-        assert "192.168." not in txt, f"Private LAN IP leaked in {jf}"
-        assert "100.112." not in txt, f"Tailscale IP leaked in {jf}"
-        assert ".ts.net" not in txt, f"Tailscale hostname leaked in {jf}"
+    root = Path(__file__).resolve().parents[1]
+    res_dir = root / "results"
+    if res_dir.exists():
+        for jf in res_dir.glob("*.json"):
+            txt = jf.read_text(encoding="utf-8")
+            assert "192.168." not in txt, f"Private LAN IP leaked in {jf}"
+            assert "100.112." not in txt, f"Tailscale IP leaked in {jf}"
+            assert ".ts.net" not in txt, f"Tailscale hostname leaked in {jf}"
+
+    # Repo-wide secret hygiene check before any public push
+    for p in list((root / "src").rglob("*.py")) + list(res_dir.glob("*.json")) + [root / "README.md"]:
+        if not p.exists():
+            continue
+        txt = p.read_text(encoding="utf-8", errors="ignore")
+        assert "AIzaSy" not in txt, f"Google API key pattern leaked in {p}"
+        assert "sk-ant-" not in txt, f"Anthropic API key pattern leaked in {p}"
+        assert "sk-proj-" not in txt, f"OpenAI API key pattern leaked in {p}"

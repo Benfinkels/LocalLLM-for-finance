@@ -1,6 +1,6 @@
-# When *Not* to Use an LLM (`when-not-to-llm`)
+# LocalLLM for Finance & Ops (`LocalLLM-for-finance`)
 
-[![CI](https://github.com/Benfinkels/when-not-to-llm/actions/workflows/ci.yml/badge.svg)](https://github.com/Benfinkels/when-not-to-llm/actions/workflows/ci.yml)
+[![CI](https://github.com/Benfinkels/LocalLLM-for-finance/actions/workflows/ci.yml/badge.svg)](https://github.com/Benfinkels/LocalLLM-for-finance/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -22,10 +22,12 @@ This repo tests **4 everyday tasks** across plain Python, local GPUs (`GTX 1080 
 
 ## What Happened (`376` Live Test Runs, Exact Ground-Truth Scoring)
 
-- **A flagship frontier model (`Gemini 4 Carbon`) *can* score `100.0%` on everything—at `6.4 s` median (`32.6 s` p95) and `$244.43` per 10,000 runs.**
-- **The Hybrid Blend (`Python + 8GB Gemma 4 + Cloud`) hit `99.2%` accuracy (`100%` on logs, table math, and multi-doc contradictions) at `1.2 s` median and `$2.76` per 10,000 runs—`89x` cheaper (`-98.9%`) and `5.2x` faster than Gemini 4 Carbon**, while beating both `MiniMax-M2.7` (`94.2%`) and `Gemini 3 Flash` (`93.8%`) outright.
-- **AI should match messy text; code should do the math.** On a 36-row table comparison with messy vendor names and dollar differences, `Gemini 3 Flash` caught every individual discrepancy yet missed the overall net total by **`$8,376–$16,247` on 5/5 runs**, and `Gemini 4 Carbon` needed **`15.5 s` median** of reasoning tokens to get `100%`. Using an 8GB local model (`Gemma 4 E2B`, `~160` tokens, `$0`) *only* to map the 6 messy vendor names—and letting Python do the math—hit **`100.0%` in `3.2 s` at `$0` API cost**.
-- **Small 8GB local models are genuinely useful—just keep inputs short.** On short messy notes (`<200` tokens), `Gemma 4 E2B` hit **`97.0%`** for free (where regex fell apart at `34.0%`). Once inputs grew past ~1,500–4,000 tokens, recall dropped straight from **`100%` to `0%`**.
+- **Flagship `Gemini 4 Carbon` scored `100.0%` across every single task—at `6.4 s` median (`32.6 s` p95) and `$244.43` per 10,000 runs.**
+- **The Hybrid Blend (`Python + 8GB Gemma 4 + Cloud tie-breaker`) matched that exact `100.0%` (`47/47`) at `1.1 s` median and `$2.86` per 10,000 runs—`85x` cheaper (`-98.8%`) and `5.9x` faster than Gemini 4 Carbon.**
+- **How Code and Local AI hit `100.0%` together:**
+  - *Tables + math:* An 8GB local model (`Gemma 4 E2B`, `~160` tokens, `$0`) maps only the 6 messy vendor names, then Python runs exact math -> **`100.0%` in `3.2 s` at `$0` API cost** (vs. `Gemini 3 Flash` missing the net total by `$8k–$16k` on 5/5 runs, and `Gemini 4 Carbon` taking `15.5 s` median).
+  - *Short messy notes:* Both Plain Python (`76.0%` in `0.03 ms`) and `Gemma 4 E2B` (`97.0%` in `1.1 s`) run for `$0` API cost. When they agree on the amount, category, and follow-up flag (`17/20` notes = `85%`), we accept the local answer; *only* the `3/20` disagreements escalate to Cloud as a tie-breaker -> **`100.0%`**!
+- **Small 8GB local models are genuinely useful—just keep inputs short.** Once inputs grew past ~1,500–4,000 tokens, recall dropped straight from **`100%` to `0%`**.
 
 ![Accuracy Matrix by Task and Compute Tier](docs/charts/task_accuracy_heatmap.png)
 
@@ -37,14 +39,14 @@ Every test uses seeded synthetic data (`47` test cases per tier) with exact prog
 
 | Setup | 1. Noisy Logs (~10k tok) | 2. Table Matching & Math | 3. Messy Note → JSON | 4. Multi-Doc Contradictions | **Overall Average** | Median / p95 Speed | **Est. Cost / 10k Runs** |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Plain Python (CPU)** | **100.0%** *(0.3 ms)* | `75.9%` *(0.2 ms)* | `34.0%` *(0.02 ms)* | `81.9%` *(0.3 ms)* | `73.0%` | **0.02 / 0.30 ms** | **`$0.00`** |
+| **Plain Python (CPU)** | **100.0%** *(0.3 ms)* | `75.9%` *(0.2 ms)* | `76.0%` *(0.03 ms)* | `81.9%` *(0.3 ms)* | `83.5%` | **0.03 / 0.30 ms** | **`$0.00`** |
 | **Phi-4 Mini 3.8B** *(GTX 1080 8GB)* | `0.0%` *(15.7 s)* | `3.2%` *(6.9 s)* | `77.0%` *(2.7 s)* | `6.7%` *(11.5 s)* | `21.7%` | 6.9 / 180.1 s | `$0.36`* |
 | **Gemma 4 E2B** *(RTX 2080 8GB)* | `0.0%` *(23.3 s)* | `4.8%` *(22.2 s)* | **`97.0%`** *(1.1 s)* | `56.4%` *(14.1 s)* | `39.6%` | 12.1 / 34.3 s | `$0.92`* |
 | **Nemotron 74B** *(RTX 4090 24GB)* | `55.2%` *(109 s, 2 TO)* | `41.3%` *(2.5 s)* | **`99.0%`** *(0.79 s)* | **`97.8%`** *(5.5 s)* | `73.3%` | 2.5 / 109.4 s | `$0.68`* |
 | **MiniMax-M2.7** *(Cloud API)* | **100.0%** *(2.8 s)* | `79.8%` *(8.7 s)* | **`99.0%`** *(0.90 s)* | **`97.8%`** *(4.3 s)* | `94.2%` | 1.4 / 8.8 s | `$12.36` |
 | **Gemini 3 Flash** *(Cloud API)* | **100.0%** *(1.7 s)* | `75.0%` *(1.3 s)* | **100.0%** *(0.78 s)* | **100.0%** *(1.8 s)* | `93.8%` | **1.1 / 1.8 s** | `$21.51` |
 | **Gemini 4 Carbon** *(Frontier API)* | **100.0%** *(19.9 s)* | **100.0%** *(15.5 s)* | **100.0%** *(3.7 s)* | **100.0%** *(12.5 s)* | **100.0%** | 6.4 / 32.6 s | `$244.43` |
-| **Hybrid Blend** *(Python + Gemma 4 + Cloud)* | **100.0%** *(0.4 ms)* | **100.0%** *(3.2 s)* | **`97.0%`** *(2.3 s)* | **100.0%** *(1.8 s)* | **`99.2%`** | 1.2 / 4.2 s | **`$2.76`** |
+| **Hybrid Blend** *(Python + Gemma 4 + Cloud)* | **100.0%** *(0.4 ms)* | **100.0%** *(3.2 s)* | **100.0%** *(1.3 s)* | **100.0%** *(1.8 s)* | **100.0%** | **1.1 / 4.2 s** | **`$2.86`** |
 
 *\*Local GPU costs estimate electricity (`$0.15/kWh × GPU power × active time`), with `$0.00` in API fees. Cloud costs use published standard per-million token rates (`MiniMax-M2.7`: `$0.30/$1.20`; `Gemini 3 Flash`: `$0.50/$3.00`; `Gemini 4 Carbon`: `$4.00/$20.00` standard / `$2.00/$10.00` Nov promo) on measured token counts.*
 

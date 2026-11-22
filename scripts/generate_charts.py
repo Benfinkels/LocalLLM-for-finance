@@ -20,6 +20,8 @@ TIER_ORDER = [
     "nemotron_4090",
     "minimax_m27",
     "gemini_flash",
+    "gemini_4_hydrogen",
+    "gemini_4_neon",
     "gemini_4_carbon",
     "hybrid",
 ]
@@ -31,6 +33,8 @@ TIER_LABELS = {
     "nemotron_4090": "Nemotron 74B\n(RTX 4090 24GB)",
     "minimax_m27": "MiniMax-M2.7\n(Cloud API)",
     "gemini_flash": "Gemini 3 Flash\n(Cloud API)",
+    "gemini_4_hydrogen": "Gemini 4 Hydrogen\n(Cloud API)",
+    "gemini_4_neon": "Gemini 4 Neon\n(Frontier API)",
     "gemini_4_carbon": "Gemini 4 Carbon\n(Frontier API)",
     "hybrid": "Hybrid Blend\n(Python+Local+Cloud)",
 }
@@ -42,7 +46,9 @@ TIER_COLORS = {
     "nemotron_4090": "#8b5cf6",
     "minimax_m27": "#f59e0b",
     "gemini_flash": "#ef4444",
-    "gemini_4_carbon": "#db2777",
+    "gemini_4_hydrogen": "#14b8a6",
+    "gemini_4_neon": "#ec4899",
+    "gemini_4_carbon": "#9d174d",
     "hybrid": "#06b6d4",
 }
 
@@ -115,10 +121,12 @@ def plot_finops_pareto(summary: dict[str, Any], out_path: Path) -> None:
         "phi4_mini": (10, -4),
         "gemma4_e2b": (10, -4),
         "nemotron_4090": (10, -4),
-        "hybrid": (-135, -4),
+        "hybrid": (-138, -2),
         "minimax_m27": (-118, -32),
-        "gemini_flash": (10, -24),
-        "gemini_4_carbon": (-138, 12),
+        "gemini_flash": (10, -28),
+        "gemini_4_hydrogen": (10, 8),
+        "gemini_4_neon": (-135, -36),
+        "gemini_4_carbon": (-135, 14),
     }
 
     for t in tiers:

@@ -63,6 +63,20 @@ PRICING_CATALOG: dict[str, TierPricing] = {
         input_per_1m_usd=0.50,
         output_per_1m_usd=3.00,
     ),
+    "gemini_4_hydrogen": TierPricing(
+        tier_id="gemini_4_hydrogen",
+        display_name="Gemini 4 Hydrogen (Cloud API)",
+        category="cloud_api",
+        input_per_1m_usd=1.50,
+        output_per_1m_usd=7.50,
+    ),
+    "gemini_4_neon": TierPricing(
+        tier_id="gemini_4_neon",
+        display_name="Gemini 4 Neon (Frontier API)",
+        category="cloud_api",
+        input_per_1m_usd=3.00,
+        output_per_1m_usd=15.00,
+    ),
     "gemini_4_carbon": TierPricing(
         tier_id="gemini_4_carbon",
         display_name="Gemini 4 Carbon (Frontier API)",

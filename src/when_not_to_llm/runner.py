@@ -163,17 +163,22 @@ def build_clients(args: argparse.Namespace) -> dict[str, Any]:
             thinking_budget=args.gemini_thinking_budget,
             rpm=args.gemini_rpm,
         )
-    if "gemini_4_carbon" in args.tiers or ("hybrid" in args.tiers and args.hybrid_cloud == "gemini_4_carbon"):
-        api_key = (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip()
-        if not api_key:
-            raise RuntimeError("GEMINI_API_KEY env var is required for gemini_4_carbon tier.")
-        clients["gemini_4_carbon"] = GeminiClient(
-            "gemini_4_carbon",
-            model=args.frontier_model,
-            api_key=api_key,
-            thinking_budget=None,  # Full default flagship reasoning (no handicapping)
-            rpm=args.gemini_rpm,
-        )
+    for g_tier, g_model in (
+        ("gemini_4_hydrogen", args.hydrogen_model),
+        ("gemini_4_neon", args.neon_model),
+        ("gemini_4_carbon", args.frontier_model),
+    ):
+        if g_tier in args.tiers or ("hybrid" in args.tiers and args.hybrid_cloud == g_tier):
+            api_key = (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip()
+            if not api_key:
+                raise RuntimeError(f"GEMINI_API_KEY env var is required for {g_tier} tier.")
+            clients[g_tier] = GeminiClient(
+                g_tier,
+                model=g_model,
+                api_key=api_key,
+                thinking_budget=None,  # Full default Gemini 4 reasoning (no handicapping)
+                rpm=args.gemini_rpm,
+            )
     return clients
 
 
@@ -323,6 +328,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "nemotron_4090",
             "minimax_m27",
             "gemini_flash",
+            "gemini_4_hydrogen",
+            "gemini_4_neon",
             "gemini_4_carbon",
             "hybrid",
         ],
@@ -338,7 +345,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--dry-run", action="store_true", help="Print token/cost estimates without making API calls.")
     ap.add_argument("--max-cost-usd", type=float, default=2.0, help="Hard cap on API spend before stopping.")
     ap.add_argument("--skip-warmup", action="store_true")
-    ap.add_argument("--hybrid-cloud", default="minimax_m27", choices=["minimax_m27", "gemini_flash", "gemini_4_carbon"])
+    ap.add_argument(
+        "--hybrid-cloud",
+        default="minimax_m27",
+        choices=["minimax_m27", "gemini_flash", "gemini_4_hydrogen", "gemini_4_neon", "gemini_4_carbon"],
+    )
 
     ap.add_argument("--sheldon-gpu0-url", default=os.environ.get("OLLAMA_GPU0_URL", "http://127.0.0.1:11434"))
     ap.add_argument("--sheldon-gpu1-url", default=os.environ.get("OLLAMA_GPU1_URL", "http://127.0.0.1:11435"))
@@ -349,6 +360,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--nemotron-model", default="nemotron-3.5-bolt:latest")
     ap.add_argument("--minimax-model", default="MiniMax-M2.7")
     ap.add_argument("--gemini-model", default=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"))
+    ap.add_argument("--hydrogen-model", default=os.environ.get("HYDROGEN_MODEL", "gemini-4-hydrogen"))
+    ap.add_argument("--neon-model", default=os.environ.get("NEON_MODEL", "gemini-4-neon"))
     ap.add_argument("--frontier-model", default=os.environ.get("FRONTIER_MODEL", "gemini-4-carbon"))
     ap.add_argument("--gemini-thinking-budget", type=int, default=0)
     ap.add_argument("--gemini-rpm", type=float, default=8.0, help="Free-tier friendly requests/minute cap.")

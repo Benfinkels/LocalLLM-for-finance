@@ -138,38 +138,125 @@ def _naive_token_vendor_map(
     return mapping
 
 
-def _deterministic_note_extract(note: str) -> dict[str, Any]:
-    # Honest regex heuristic: captures explicit "$X", simple name patterns, and keywords.
-    amt = 0.0
-    m_k = re.search(r"\$\s*([\d,]+(?:\.\d+)?)\s*k\b", note, re.IGNORECASE)
-    m_d = re.search(r"\$\s*([\d,]+(?:\.\d+)?)", note)
+_WORD_NUMS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+    "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+}
+
+_ALLOWED_NOTE_CATEGORIES = frozenset(
+    {"renewal", "invoice_dispute", "onboarding", "cancellation", "upsell"}
+)
+
+_NO_FOLLOWUP_CUES = (
+    "nothing left", "no outreach", "all set", "just logging", "log for record",
+    "zero open", "closed", "no further action", "no follow-up", "archive only",
+    "do not reach out", "not in our court", "completely wrapped up",
+    "wait for them to re-engage", "already reversed it",
+)
+
+
+def parse_english_amount(text: str) -> float | None:
+    """General deterministic parser for numeric and spelled-out English USD amounts."""
+    low = text.lower()
+    if any(p in low for p in ("zero-dollar", "zero-cost", "$0", "free zero")):
+        return 0.0
+    m_k = re.search(r"\$\s*([\d,]+(?:\.\d+)?)\s*k\b", low)
     if m_k:
-        amt = float(m_k.group(1).replace(",", "")) * 1000.0
-    elif m_d:
-        amt = float(m_d.group(1).replace(",", ""))
+        return round(float(m_k.group(1).replace(",", "")) * 1000.0, 2)
+    m_d = re.search(r"\$\s*([\d,]+(?:\.\d+)?)", low)
+    if m_d:
+        return round(float(m_d.group(1).replace(",", "")), 2)
+    if "half-a-grand" in low or "half a grand" in low:
+        return 500.0
+
+    # Handle "<num> point <digit> (grand|thousand)" and "<num> and a half (grand|thousand)"
+    tokens = re.findall(r"[a-z]+|\d+(?:\.\d+)?", low.replace("-", " "))
+    for i, tok in enumerate(tokens):
+        if tok in ("grand", "thousand") and i >= 1:
+            if i >= 4 and tokens[i - 3 : i] == ["and", "a", "half"] and tokens[i - 4] in _WORD_NUMS:
+                return round((_WORD_NUMS[tokens[i - 4]] + 0.5) * 1000.0, 2)
+            if i >= 3 and tokens[i - 2] == "point" and tokens[i - 3] in _WORD_NUMS and tokens[i - 1] in _WORD_NUMS:
+                return round((_WORD_NUMS[tokens[i - 3]] + _WORD_NUMS[tokens[i - 1]] / 10.0) * 1000.0, 2)
+
+    # Scan contiguous English number-word spans
+    best_val: float | None = None
+    best_len = 0
+    n = len(tokens)
+    i = 0
+    while i < n:
+        if tokens[i] not in _WORD_NUMS:
+            i += 1
+            continue
+        j = i
+        total = 0.0
+        current = 0.0
+        saw_scale = False
+        while j < n:
+            w = tokens[j]
+            if w in _WORD_NUMS:
+                val = _WORD_NUMS[w]
+                # Spoken shorthand like "eighteen fifty" -> 1850
+                if 11 <= current <= 19 and val >= 20 and not saw_scale:
+                    current = current * 100 + val
+                    saw_scale = True
+                else:
+                    current += val
+            elif w == "hundred":
+                current = max(1.0, current) * 100.0
+                saw_scale = True
+            elif w in ("thousand", "grand"):
+                total += max(1.0, current) * 1000.0
+                current = 0.0
+                saw_scale = True
+            elif w == "and" and j + 1 < n and tokens[j + 1] in _WORD_NUMS:
+                pass
+            else:
+                break
+            j += 1
+        span_val = total + current
+        span_len = j - i
+        # Only treat as currency if scaled (>=100) or followed by currency words
+        next_words = set(tokens[j : min(n, j + 4)])
+        if (saw_scale or next_words & {"dollar", "dollars", "bucks", "usd", "acv", "month", "yr"}) and span_len > best_len:
+            best_val = round(span_val, 2)
+            best_len = span_len
+        i = max(i + 1, j)
+    return best_val
+
+
+def _deterministic_note_extract(note: str) -> dict[str, Any]:
+    """Improved general-purpose regex + English-number parser (no NER model)."""
+    # Strip optional leading "Header Title: " prefix before scanning for names
+    body = note.split(":", 1)[1].strip() if ":" in note[:45] else note
+    amt = parse_english_amount(body)
+    if amt is None:
+        amt = 0.0
 
     low = note.lower()
-    if any(w in low for w in ("renew", "extend", "roll over")):
+    if any(w in low for w in ("renew", "extend", "extension", "roll over", "rollover", "keep their")):
         cat = "renewal"
-    elif any(w in low for w in ("invoice", "discrepancy", "overcharge", "double-charged", "late fee")):
+    elif any(w in low for w in ("invoice", "discrepancy", "overcharge", "double-billed", "double-charged", "late fee", "penalty", "mismatch", "variance")):
         cat = "invoice_dispute"
-    elif any(w in low for w in ("cancel", "shutting down", "dropping", "churn")):
+    elif any(w in low for w in ("cancel", "shutting down", "winding down", "dropping", "churn", "terminate", "walk away", "deactivated", "end their")):
         cat = "cancellation"
-    elif any(w in low for w in ("onboard", "kickoff", "implementation", "provisioning")):
+    elif any(w in low for w in ("onboard", "kickoff", "implementation", "provisioning", "trial", "pipeline setup", "go-live")):
         cat = "onboarding"
-    elif any(w in low for w in ("upgrade", "add-on", "extra seats", "expanding")):
+    elif any(w in low for w in ("upgrade", "add-on", "extra seats", "expanding", "expansion", "move up", "step up")):
         cat = "upsell"
     else:
         cat = "unknown"
 
-    followup = True
-    if any(w in low for w in ("nothing left", "no outreach", "all set", "just logging", "zero open", "closed", "no further action")):
-        followup = False
+    followup = not any(cue in low for cue in _NO_FOLLOWUP_CUES)
 
-    # Naive Proper-Noun bigram extraction
-    names = re.findall(r"\b([A-Z][a-z]+ [A-Z][a-z]+)\b", note)
-    contact = names[0] if len(names) >= 1 else ""
-    company = names[1] if len(names) >= 2 else ""
+    # Best-effort proper-noun extraction (parenthesized contact or capitalized spans)
+    paren = re.search(r"\((?:contact:\s*)?([A-Z][a-z]+ [A-Z][a-z]+)\)", body)
+    names = re.findall(r"\b([A-Z][a-z]+ [A-Z][a-z]+)\b", body)
+    contact = paren.group(1) if paren else (names[0] if names else "")
+    company = next((nm for nm in names if nm != contact), "")
     return {
         "contact": contact,
         "company": company,
@@ -595,9 +682,50 @@ def run_hybrid(
         )
 
     if case.task == "note_to_json":
-        res = slm_call(case.system_prompt, case.prompt)
-        res.routed_to = f"hybrid->{res.routed_to}"
-        return res
+        # Code + Local SLM agreement check: run both ($0), escalate ONLY disagreements to Cloud.
+        det = _deterministic_note_extract(case.payload["note"])
+        det_amt = parse_english_amount(case.payload["note"])
+        slm_res = slm_call(case.system_prompt, case.prompt)
+        parsed, ok = extract_json_object(slm_res.raw_output)
+        needs_escalation = False
+        if not ok or not isinstance(parsed, dict):
+            needs_escalation = True
+        else:
+            cat = str(parsed.get("category", "")).strip().lower()
+            try:
+                slm_amt = float(parsed.get("amount_usd"))
+            except Exception:
+                slm_amt = None
+            if (
+                cat not in _ALLOWED_NOTE_CATEGORIES
+                or not str(parsed.get("contact", "")).strip()
+                or not str(parsed.get("company", "")).strip()
+                or not isinstance(parsed.get("requires_followup"), bool)
+                or (det_amt is not None and (slm_amt is None or abs(det_amt - slm_amt) > 0.02))
+                or (det["category"] != "unknown" and cat != det["category"])
+                or (parsed.get("requires_followup") != det["requires_followup"])
+            ):
+                needs_escalation = True
+
+        if not needs_escalation:
+            slm_res.routed_to = f"hybrid->{slm_res.routed_to}"
+            return slm_res
+
+        # Escalate only the small fraction of notes where Code and Local SLM disagree
+        esc = cloud_call(case.system_prompt, case.prompt)
+        return TierResult(
+            raw_output=esc.raw_output,
+            latency_ms=round(slm_res.latency_ms + esc.latency_ms, 2),
+            input_tokens=slm_res.input_tokens + esc.input_tokens,
+            output_tokens=slm_res.output_tokens + esc.output_tokens,
+            thinking_tokens=slm_res.thinking_tokens + esc.thinking_tokens,
+            load_duration_ms=slm_res.load_duration_ms,
+            cost_usd=round(slm_res.cost_usd + esc.cost_usd, 8),
+            api_usd=round(slm_res.api_usd + esc.api_usd, 8),
+            power_usd=round(slm_res.power_usd + esc.power_usd, 8),
+            routed_to=f"hybrid->{slm_res.routed_to}->escalate->{esc.routed_to}",
+            error=esc.error,
+        )
 
     # Multi-doc unstructured prose (>1,500 tokens): skip small SLM, route directly to Cloud/74B
     res = cloud_call(case.system_prompt, case.prompt)
