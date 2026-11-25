@@ -209,3 +209,49 @@ def test_committed_results_have_no_private_ips() -> None:
         assert "AIzaSy" not in txt, f"Google API key pattern leaked in {p}"
         assert "sk-ant-" not in txt, f"Anthropic API key pattern leaked in {p}"
         assert "sk-proj-" not in txt, f"OpenAI API key pattern leaked in {p}"
+
+
+def test_markdown_summary_formats_synthetic_values_and_escapes_names() -> None:
+    from when_not_to_llm.runner import format_summary_markdown
+
+    summary = {"custom": {"display_name": "Local | Custom\nModel", "cases": 4, "errors": 1,
+                           "macro_core_accuracy": 0.875, "p50_latency_ms": 12.5,
+                           "p95_latency_ms": 20, "cost_per_10k_tasks_usd": 3.125}}
+    rendered = format_summary_markdown(summary)
+    assert rendered.splitlines() == [
+        "| Tier | Cases | Errors | Core accuracy | p50 (ms) | p95 (ms) | Cost / 10k (USD) |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        r"| Local \| Custom<br>Model | 4 | 1 | 87.50% | 12.50 | 20.00 | 3.12 |",
+    ]
+    assert len(format_summary_markdown({}).splitlines()) == 2
+
+
+def test_markdown_summary_from_committed_results_is_offline(capsys, monkeypatch) -> None:
+    from when_not_to_llm import runner
+
+    root = Path(__file__).resolve().parents[1]
+    path = root / "results/benchmark_results.json"
+    before = path.read_bytes()
+    summary = json.loads(before)["summary"]
+    def no_benchmark(_args):
+        raise AssertionError("summarizing saved results must not run benchmarks or models")
+    monkeypatch.setattr(runner, "run_benchmark", no_benchmark)
+    runner.main(["--summary-from", str(path), "--format", "markdown"])
+    rendered = capsys.readouterr().out
+    assert rendered.startswith("| Tier | Cases |")
+    assert len(rendered.splitlines()) == len(summary) + 2
+    for row in summary.values():
+        assert row["display_name"] in rendered
+        assert f"{row['macro_core_accuracy']:.2%}" in rendered
+    assert path.read_bytes() == before
+
+
+def test_summary_from_custom_file_keeps_default_json_output(tmp_path, capsys, monkeypatch) -> None:
+    from when_not_to_llm import runner
+
+    path = tmp_path / "custom.json"
+    summary = {"custom": {"cases": 0}}
+    path.write_text(json.dumps({"summary": summary}), encoding="utf-8")
+    monkeypatch.setattr(runner, "run_benchmark", lambda _args: (_ for _ in ()).throw(AssertionError("offline")))
+    runner.main(["--summary-from", str(path)])
+    assert json.loads(capsys.readouterr().out) == summary

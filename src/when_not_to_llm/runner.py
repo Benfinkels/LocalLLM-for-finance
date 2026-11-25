@@ -116,6 +116,23 @@ def summarize_results(records: list[dict[str, Any]]) -> dict[str, Any]:
     return tier_summary
 
 
+def format_summary_markdown(summary: dict[str, Any]) -> str:
+    """Render the benchmark's tier summary without exposing per-case payloads."""
+    lines = [
+        "| Tier | Cases | Errors | Core accuracy | p50 (ms) | p95 (ms) | Cost / 10k (USD) |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for tier, row in sorted(summary.items()):
+        name = str(row.get("display_name", tier)).replace("\\", "\\\\").replace("|", "\\|")
+        name = name.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
+        lines.append(
+            f"| {name} | {row['cases']} | {row['errors']} | {row['macro_core_accuracy']:.2%} | "
+            f"{row['p50_latency_ms']:.2f} | {row['p95_latency_ms']:.2f} | "
+            f"{row['cost_per_10k_tasks_usd']:.2f} |"
+        )
+    return "\n".join(lines)
+
+
 def build_clients(args: argparse.Namespace) -> dict[str, Any]:
     clients: dict[str, Any] = {}
     if "phi4_mini" in args.tiers:
@@ -340,6 +357,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         choices=["log_triage", "finance_reconcile", "note_to_json", "doc_contradictions", "context_cliff"],
     )
+    ap.add_argument("--format", choices=["json", "markdown"], default="json",
+                    help="Summary output format (default: json).")
+    ap.add_argument("--summary-from", type=Path,
+                    help="Render a saved benchmark JSON summary without running models.")
     ap.add_argument("--output", default="results/benchmark_results.json")
     ap.add_argument("--resume", action="store_true", help="Resume from existing output JSON checkpoint.")
     ap.add_argument("--dry-run", action="store_true", help="Print token/cost estimates without making API calls.")
@@ -370,9 +391,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    res = run_benchmark(args)
-    if not args.dry_run:
-        print(json.dumps(res["summary"], indent=2))
+    if args.summary_from:
+        try:
+            res = json.loads(args.summary_from.read_text(encoding="utf-8"))
+            if not isinstance(res, dict) or not isinstance(res.get("summary"), dict):
+                raise ValueError("benchmark JSON must contain a summary object")
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"Cannot read benchmark summary: {exc}") from exc
+    else:
+        res = run_benchmark(args)
+    if args.summary_from or not args.dry_run:
+        if args.format == "markdown":
+            print(format_summary_markdown(res["summary"]))
+        else:
+            print(json.dumps(res["summary"], indent=2))
 
 
 if __name__ == "__main__":
