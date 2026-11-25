@@ -136,3 +136,19 @@ python scripts/generate_charts.py
 ```
 
 All saved results in [`results/benchmark_results.json`](results/benchmark_results.json) and [`results/infra_cliff.json`](results/infra_cliff.json) come from synthetic test data (`src/when_not_to_llm/datasets.py`) and are checked in CI (`tests/test_suite.py`) so no private IPs or keys are committed.
+
+
+### Markdown summaries from saved runs
+
+Render the checked-in benchmark output, or a custom run with the same JSON
+`summary` structure, without contacting a model or modifying the saved results:
+
+```bash
+when-not-to-llm --summary-from results/benchmark_results.json --format markdown
+when-not-to-llm --summary-from /path/to/custom-run.json --format markdown
+```
+
+The table shows each tier's case/error counts, core accuracy, latency percentiles,
+and projected cost per 10,000 tasks. JSON remains the default output format.
+`--format markdown` also formats the summary of a newly executed benchmark; the
+`--summary-from` form is the offline way to render an existing run.
