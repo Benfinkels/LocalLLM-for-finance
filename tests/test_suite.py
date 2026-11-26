@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from when_not_to_llm.datasets import (
+    generate_bank_statement_cases,
     generate_context_cliff_cases,
     generate_doc_contradictions_cases,
     generate_finance_reconcile_cases,
@@ -17,6 +18,7 @@ from when_not_to_llm.finops import compute_call_cost_usd, sanitize_telemetry
 from when_not_to_llm.runner import estimate_dry_run, summarize_results
 from when_not_to_llm.tiers import (
     TierResult,
+    analyze_bank_statement_exact,
     parse_english_amount,
     reconcile_tables_exact,
     run_deterministic,
@@ -209,3 +211,62 @@ def test_committed_results_have_no_private_ips() -> None:
         assert "AIzaSy" not in txt, f"Google API key pattern leaked in {p}"
         assert "sk-ant-" not in txt, f"Anthropic API key pattern leaked in {p}"
         assert "sk-proj-" not in txt, f"OpenAI API key pattern leaked in {p}"
+
+
+def test_bank_statement_determinism_ground_truth_and_baseline() -> None:
+    a = generate_bank_statement_cases()
+    b = load_all_cases(["bank_statement"])
+    assert len(a) == 5
+    assert [c.prompt for c in a] == [c.prompt for c in b]
+    assert [c.ground_truth for c in a] == [c.ground_truth for c in b]
+
+    baseline_scores = []
+    for case in a:
+        # Ground truth scores a perfect 1.0
+        gt_scored = score_case("bank_statement", json.dumps(case.ground_truth), case.ground_truth)
+        assert gt_scored["json_valid"] is True
+        assert gt_scored["score"] == 1.0, f"Expected 1.0 on {case.case_id}, got {gt_scored}"
+
+        # Exact Python analyzer with a perfect merchant-category map also scores 1.0
+        exact = analyze_bank_statement_exact(case.payload["rows"], case.ground_truth["category_map"])
+        assert score_case("bank_statement", json.dumps(exact), case.ground_truth)["score"] == 1.0
+
+        # Honest deterministic baseline nails anomalies + net spend but misses opaque processor codes
+        det = run_deterministic(case)
+        det_scored = score_case("bank_statement", det.raw_output, case.ground_truth)
+        assert det_scored["net_spend_exact"] is True
+        assert det_scored["anomaly_f1"] == 1.0
+        assert 0.0 < det_scored["category_accuracy"] < 1.0
+        assert det.cost_usd == 0.0
+        baseline_scores.append(det_scored["score"])
+
+    assert all(0.5 < s < 1.0 for s in baseline_scores)
+
+
+def test_bank_statement_verifier_penalizes_drift_and_hybrid_routes_cleanly() -> None:
+    case = generate_bank_statement_cases(n=1)[0]
+    bad = json.loads(json.dumps(case.ground_truth))
+    bad["net_spend_usd"] = round(bad["net_spend_usd"] + 25.00, 2)
+    bad["anomalies"] = []
+    res = score_case("bank_statement", json.dumps(bad), case.ground_truth)
+    assert res["net_spend_exact"] is False
+    assert res["anomaly_f1"] == 0.0
+    assert res["score"] <= 0.50
+
+    def mock_slm(sys_p: str, usr_p: str) -> TierResult:
+        assert "MERCHANT_DESCRIPTIONS" in usr_p
+        return TierResult(
+            raw_output=json.dumps({"mapping": case.ground_truth["category_map"]}),
+            latency_ms=220.0,
+            input_tokens=180,
+            output_tokens=110,
+            cost_usd=0.000001,
+            routed_to="gemma4_e2b",
+        )
+
+    def mock_cloud(sys_p: str, usr_p: str) -> TierResult:
+        raise AssertionError("Hybrid bank_statement should not call cloud")
+
+    hybrid_res = run_hybrid(case, mock_slm, mock_cloud)
+    assert hybrid_res.routed_to == "hybrid->gemma4_e2b+python"
+    assert score_case("bank_statement", hybrid_res.raw_output, case.ground_truth)["score"] == 1.0

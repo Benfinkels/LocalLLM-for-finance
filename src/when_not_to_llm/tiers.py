@@ -9,6 +9,7 @@ import urllib.error
 import urllib.request
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Callable
 
 from .datasets import BenchmarkCase
@@ -300,6 +301,115 @@ def _deterministic_doc_contradictions(memos_text: str) -> dict[str, Any]:
     return {"contradictions": found}
 
 
+_REFUND_PREFIX_RE = re.compile(r"^(?:refund|cr|rev\*?)\s+", re.IGNORECASE)
+
+_BANK_CATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("cloud_infra", ("aws", "cloud", "hosting", "digitalocean")),
+    ("saas_tools", ("slack", "github", "software", "saas")),
+    ("travel_lodging", ("air lines", "airline", "hotel", "marriott", "delta", "lodging")),
+    ("meals_dining", ("coffee", "starbucks", "bread", "catering", "cafe", "restaurant")),
+    ("office_supplies", ("staples", "office", "supply", "depot")),
+    ("shipping_logistics", ("fedex", "ups", "shipping", "freight")),
+)
+
+
+def _normalize_bank_merchant(description: str) -> str:
+    cleaned = _REFUND_PREFIX_RE.sub("", description.strip())
+    return re.sub(r"\s+", " ", cleaned).strip().lower()
+
+
+def _naive_bank_category_map(descriptions: list[str]) -> dict[str, str]:
+    """Honest deterministic keyword categorizer (no curated processor-code table)."""
+    mapping: dict[str, str] = {}
+    for desc in descriptions:
+        low = _normalize_bank_merchant(desc)
+        matched = "uncategorized"
+        for category, keywords in _BANK_CATEGORY_KEYWORDS:
+            if any(kw in low for kw in keywords):
+                matched = category
+                break
+        mapping[desc] = matched
+    return mapping
+
+
+def analyze_bank_statement_exact(
+    rows: list[dict[str, Any]],
+    category_map: dict[str, str],
+) -> dict[str, Any]:
+    """Cent-exact deterministic anomaly detection & net spend given a description -> category map."""
+    norm_cat_map = {k.strip().lower(): v.strip().lower() for k, v in category_map.items() if k and v}
+    parsed = [
+        {
+            "txn_id": r["txn_id"],
+            "date": date.fromisoformat(r["date"]),
+            "description": r["description"],
+            "merchant_key": _normalize_bank_merchant(r["description"]),
+            "amount": round(float(r["amount_usd"]), 2),
+        }
+        for r in rows
+    ]
+
+    categories = [
+        {
+            "txn_id": p["txn_id"],
+            "category": norm_cat_map.get(p["description"].strip().lower())
+            or norm_cat_map.get(p["merchant_key"])
+            or "uncategorized",
+        }
+        for p in parsed
+    ]
+
+    anomalies: list[dict[str, Any]] = []
+    used_dup: set[str] = set()
+    used_ref: set[str] = set()
+
+    for i, a in enumerate(parsed):
+        if a["amount"] >= 0:
+            continue
+        for j in range(i + 1, len(parsed)):
+            b = parsed[j]
+            day_diff = abs((b["date"] - a["date"]).days)
+            if (
+                b["amount"] < 0
+                and a["txn_id"] not in used_dup
+                and b["txn_id"] not in used_dup
+                and a["merchant_key"] == b["merchant_key"]
+                and abs(a["amount"] - b["amount"]) <= 0.02
+                and day_diff <= 2
+            ):
+                anomalies.append(
+                    {
+                        "type": "duplicate_charge",
+                        "txn_ids": sorted([a["txn_id"], b["txn_id"]]),
+                        "amount_usd": round(abs(a["amount"]), 2),
+                    }
+                )
+                used_dup.update((a["txn_id"], b["txn_id"]))
+            elif (
+                b["amount"] > 0
+                and a["txn_id"] not in used_ref
+                and b["txn_id"] not in used_ref
+                and a["merchant_key"] == b["merchant_key"]
+                and abs(a["amount"] + b["amount"]) <= 0.02
+                and day_diff <= 5
+            ):
+                anomalies.append(
+                    {
+                        "type": "refund_reversal",
+                        "txn_ids": sorted([a["txn_id"], b["txn_id"]]),
+                        "amount_usd": round(abs(a["amount"]), 2),
+                    }
+                )
+                used_ref.update((a["txn_id"], b["txn_id"]))
+
+    net_spend = round(-sum(p["amount"] for p in parsed), 2)
+    return {
+        "categories": categories,
+        "anomalies": anomalies,
+        "net_spend_usd": net_spend,
+    }
+
+
 def run_deterministic(case: BenchmarkCase) -> TierResult:
     t0 = time.perf_counter()
     if case.task == "log_triage":
@@ -329,6 +439,11 @@ def run_deterministic(case: BenchmarkCase) -> TierResult:
                 for inc_id, owner, imp in matches
             ]
         }
+    elif case.task == "bank_statement":
+        rows = case.payload["rows"]
+        descriptions = sorted({r["description"] for r in rows})
+        cmap = _naive_bank_category_map(descriptions)
+        obj = analyze_bank_statement_exact(rows, cmap)
     else:
         raise ValueError(f"Unsupported task: {case.task}")
 
@@ -670,6 +785,36 @@ def run_hybrid(
         total_ms = (time.perf_counter() - t0) * 1000.0
         return TierResult(
             raw_output=json.dumps(reconciled),
+            latency_ms=round(total_ms, 2),
+            input_tokens=slm_res.input_tokens,
+            output_tokens=slm_res.output_tokens,
+            load_duration_ms=slm_res.load_duration_ms,
+            cost_usd=slm_res.cost_usd,
+            api_usd=slm_res.api_usd,
+            power_usd=slm_res.power_usd,
+            routed_to=f"hybrid->{slm_res.routed_to}+python",
+            error=slm_res.error,
+        )
+
+    if case.task == "bank_statement":
+        rows = case.payload["rows"]
+        descriptions = sorted({r["description"] for r in rows})
+        sys_p = (
+            "Map each messy bank-statement merchant description to one canonical category: "
+            "cloud_infra, saas_tools, travel_lodging, meals_dining, office_supplies, shipping_logistics. "
+            'Return ONLY JSON: {"mapping": {"<DESCRIPTION>": "<CATEGORY>"}}'
+        )
+        usr_p = f"MERCHANT_DESCRIPTIONS: {json.dumps(descriptions)}"
+        t0 = time.perf_counter()
+        slm_res = slm_call(sys_p, usr_p)
+        parsed, ok = extract_json_object(slm_res.raw_output)
+        cmap = parsed.get("mapping", {}) if (ok and isinstance(parsed, dict)) else {}
+        if not isinstance(cmap, dict) or not cmap:
+            cmap = _naive_bank_category_map(descriptions)
+        analyzed = analyze_bank_statement_exact(rows, cmap)
+        total_ms = (time.perf_counter() - t0) * 1000.0
+        return TierResult(
+            raw_output=json.dumps(analyzed),
             latency_ms=round(total_ms, 2),
             input_tokens=slm_res.input_tokens,
             output_tokens=slm_res.output_tokens,
