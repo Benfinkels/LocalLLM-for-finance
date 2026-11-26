@@ -9,6 +9,7 @@ import csv
 import io
 import random
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from typing import Any
 
 
@@ -610,6 +611,203 @@ def generate_context_cliff_cases(
     return cases
 
 
+# ---------------------------------------------------------------------------
+# Track 6: Messy Bank-Statement CSV Categorization & Anomaly Detection
+# ---------------------------------------------------------------------------
+
+BANK_STATEMENT_CATEGORIES = (
+    "cloud_infra",
+    "saas_tools",
+    "travel_lodging",
+    "meals_dining",
+    "office_supplies",
+    "shipping_logistics",
+)
+
+# Mix of plain-English descriptors (obvious to keyword rules) and abbreviated
+# card-processor strings (where naive regex fails and a small local SLM shines).
+_BANK_MERCHANT_CATALOG: list[tuple[str, str, bool, tuple[float, float]]] = [
+    # (description, category, is_obvious, (min_amt, max_amt))
+    ("AWS CLOUD SERVICES US-EAST", "cloud_infra", True, (180.0, 950.0)),
+    ("DIGITALOCEAN CLOUD HOSTING", "cloud_infra", True, (45.0, 240.0)),
+    ("CF*FLARE PRO PLAN CA 8821", "cloud_infra", False, (25.0, 210.0)),
+    ("HETZNER*ONLINE DE 9912", "cloud_infra", False, (38.0, 195.0)),
+    ("SLACK TECHNOLOGIES SUB", "saas_tools", True, (65.0, 320.0)),
+    ("GITHUB ENTERPRISE BILL", "saas_tools", True, (84.0, 420.0)),
+    ("SQSP*WORKSPACE INV441", "saas_tools", False, (28.0, 144.0)),
+    ("FGM*FIGMA ORG SEAT SF", "saas_tools", False, (45.0, 225.0)),
+    ("LIN*LINEAR APP SANFRAN", "saas_tools", False, (32.0, 160.0)),
+    ("DELTA AIR LINES TICKET", "travel_lodging", True, (260.0, 780.0)),
+    ("MARRIOTT HOTEL STAY", "travel_lodging", True, (190.0, 620.0)),
+    ("UAL*0162418922 CHI", "travel_lodging", False, (240.0, 690.0)),
+    ("HTL*COURTYARD BOS 04", "travel_lodging", False, (175.0, 480.0)),
+    ("STARBUCKS COFFEE #441", "meals_dining", True, (12.0, 48.0)),
+    ("PANERA BREAD CATERING", "meals_dining", True, (68.0, 215.0)),
+    ("TST*BLUEBOTTLE NYC 09", "meals_dining", False, (14.0, 52.0)),
+    ("SQ *SWEETGREEN 218", "meals_dining", False, (18.0, 64.0)),
+    ("STAPLES OFFICE SUPPLY", "office_supplies", True, (35.0, 185.0)),
+    ("OFFICE DEPOT ORDER", "office_supplies", True, (42.0, 210.0)),
+    ("ULN*ULINE BOX/PACK WI", "office_supplies", False, (85.0, 340.0)),
+    ("BLC*BLICK ART MATS 02", "office_supplies", False, (29.0, 135.0)),
+    ("FEDEX EXPRESS SHIPPING", "shipping_logistics", True, (28.0, 175.0)),
+    ("UPS GROUND FREIGHT", "shipping_logistics", True, (45.0, 260.0)),
+    ("PB*PITNEY BOWES POST", "shipping_logistics", False, (34.0, 145.0)),
+    ("STMP*ENDICIA LABEL 71", "shipping_logistics", False, (22.0, 118.0)),
+]
+
+_REFUND_PREFIXES = ("REFUND ", "CR ", "REV* ")
+
+
+def generate_bank_statement_cases(n: int = 5, seed: int = 601) -> list[BenchmarkCase]:
+    system_prompt = (
+        "You are a corporate accounting analyst reviewing a bank-statement CSV "
+        "(negative amount_usd = charge, positive amount_usd = refund/credit). "
+        "1. Categorize EVERY transaction into one of these exact categories: "
+        "cloud_infra, saas_tools, travel_lodging, meals_dining, office_supplies, shipping_logistics. "
+        "2. Detect all anomalies:\n"
+        "- 'duplicate_charge': two negative charges for the same merchant and exact same amount within 2 days\n"
+        "- 'refund_reversal': a negative charge paired with a matching positive credit of the same magnitude for the same merchant\n"
+        "3. Compute net_spend_usd = round(-sum(amount_usd across all rows), 2).\n"
+        "Return ONLY JSON matching:\n"
+        '{"categories": [{"txn_id": "TXN-XXXX", "category": "<category>"}], '
+        '"anomalies": [{"type": "duplicate_charge|refund_reversal", "txn_ids": ["TXN-A", "TXN-B"], "amount_usd": <positive_float>}], '
+        '"net_spend_usd": <float>}'
+    )
+    obvious_pool = [m for m in _BANK_MERCHANT_CATALOG if m[2]]
+    opaque_pool = [m for m in _BANK_MERCHANT_CATALOG if not m[2]]
+    cases: list[BenchmarkCase] = []
+
+    for idx in range(n):
+        rng = random.Random(seed + idx)
+        # 5 obvious + 5 opaque merchants so deterministic rules score partial credit
+        # while a small local SLM can push categorization to 100%.
+        chosen = rng.sample(obvious_pool, 5) + rng.sample(opaque_pool, 5)
+        rng.shuffle(chosen)
+
+        base_day = date(2026, 10, 1) + timedelta(days=idx * 7)
+        txn_seq = 6001 + idx * 100
+        used_amounts: set[float] = set()
+        raw_entries: list[dict[str, Any]] = []
+
+        for offset, (desc, cat, _is_obv, (lo, hi)) in enumerate(chosen):
+            amt = round(rng.uniform(lo, hi), 2)
+            while amt in used_amounts:
+                amt = round(amt + 0.37, 2)
+            used_amounts.add(amt)
+            txn_date = base_day + timedelta(days=offset * 2 + rng.randint(0, 1))
+            raw_entries.append(
+                {
+                    "date_obj": txn_date,
+                    "description": desc,
+                    "amount": -amt,
+                    "category": cat,
+                }
+            )
+
+        # Pick 2 distinct base entries: one gets a duplicate charge, one gets a refund reversal.
+        dup_src_idx, ref_src_idx = rng.sample(range(len(raw_entries)), 2)
+        dup_src = raw_entries[dup_src_idx]
+        ref_src = raw_entries[ref_src_idx]
+
+        dup_entry = {
+            "date_obj": dup_src["date_obj"] + timedelta(days=rng.randint(0, 1)),
+            "description": dup_src["description"],
+            "amount": dup_src["amount"],
+            "category": dup_src["category"],
+            "pair_kind": "duplicate_charge",
+            "pair_src": dup_src_idx,
+        }
+        ref_prefix = rng.choice(_REFUND_PREFIXES)
+        ref_entry = {
+            "date_obj": ref_src["date_obj"] + timedelta(days=rng.randint(1, 3)),
+            "description": f"{ref_prefix}{ref_src['description']}",
+            "amount": round(-ref_src["amount"], 2),
+            "category": ref_src["category"],
+            "pair_kind": "refund_reversal",
+            "pair_src": ref_src_idx,
+        }
+
+        all_entries = [
+            dict(e, orig_idx=i) for i, e in enumerate(raw_entries)
+        ] + [dup_entry, ref_entry]
+        all_entries.sort(key=lambda e: (e["date_obj"], e["description"], e["amount"]))
+
+        rows: list[dict[str, Any]] = []
+        truth_categories: list[dict[str, str]] = []
+        orig_to_txn_id: dict[int, str] = {}
+        dup_txn_id = ""
+        ref_txn_id = ""
+        category_map: dict[str, str] = {}
+
+        for entry in all_entries:
+            tid = f"TXN-{txn_seq}"
+            txn_seq += 1
+            amt_val = round(float(entry["amount"]), 2)
+            rows.append(
+                {
+                    "txn_id": tid,
+                    "date": entry["date_obj"].isoformat(),
+                    "description": entry["description"],
+                    "amount_usd": f"{amt_val:.2f}",
+                }
+            )
+            truth_categories.append({"txn_id": tid, "category": entry["category"]})
+            category_map[entry["description"]] = entry["category"]
+            if "orig_idx" in entry:
+                orig_to_txn_id[entry["orig_idx"]] = tid
+            elif entry.get("pair_kind") == "duplicate_charge":
+                dup_txn_id = tid
+            elif entry.get("pair_kind") == "refund_reversal":
+                ref_txn_id = tid
+
+        truth_anomalies = [
+            {
+                "type": "duplicate_charge",
+                "txn_ids": sorted([orig_to_txn_id[dup_src_idx], dup_txn_id]),
+                "amount_usd": round(abs(float(dup_src["amount"])), 2),
+            },
+            {
+                "type": "refund_reversal",
+                "txn_ids": sorted([orig_to_txn_id[ref_src_idx], ref_txn_id]),
+                "amount_usd": round(abs(float(ref_src["amount"])), 2),
+            },
+        ]
+        net_spend = round(-sum(float(r["amount_usd"]) for r in rows), 2)
+        stmt_csv = _rows_to_csv(rows, ["txn_id", "date", "description", "amount_usd"])
+
+        prompt = (
+            "Categorize each bank-statement line, detect any duplicate charges or "
+            "refund reversals, and compute exact net_spend_usd as JSON.\n\n"
+            f"BANK_STATEMENT:\n{stmt_csv}"
+        )
+        cases.append(
+            BenchmarkCase(
+                task="bank_statement",
+                case_id=f"bank_statement_{idx + 1:02d}",
+                prompt=prompt,
+                system_prompt=system_prompt,
+                ground_truth={
+                    "categories": truth_categories,
+                    "anomalies": truth_anomalies,
+                    "net_spend_usd": net_spend,
+                    "category_map": category_map,
+                },
+                approx_tokens=estimate_tokens(system_prompt + prompt),
+                payload={"rows": rows},
+            )
+        )
+    return cases
+
+
+_DEFAULT_TASKS = (
+    "log_triage",
+    "finance_reconcile",
+    "note_to_json",
+    "doc_contradictions",
+    "context_cliff",
+)
+
+
 def load_all_cases(tasks: list[str] | None = None) -> list[BenchmarkCase]:
     builders = {
         "log_triage": generate_log_triage_cases,
@@ -617,8 +815,9 @@ def load_all_cases(tasks: list[str] | None = None) -> list[BenchmarkCase]:
         "note_to_json": generate_note_to_json_cases,
         "doc_contradictions": generate_doc_contradictions_cases,
         "context_cliff": generate_context_cliff_cases,
+        "bank_statement": generate_bank_statement_cases,
     }
-    selected = tasks or list(builders.keys())
+    selected = tasks or list(_DEFAULT_TASKS)
     out: list[BenchmarkCase] = []
     for name in selected:
         if name not in builders:

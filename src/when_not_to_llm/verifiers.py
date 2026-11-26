@@ -232,6 +232,81 @@ def score_context_cliff(pred: dict[str, Any] | None, truth: dict[str, Any]) -> d
     }
 
 
+def score_bank_statement(pred: dict[str, Any] | None, truth: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(pred, dict):
+        return {
+            "score": 0.0,
+            "category_accuracy": 0.0,
+            "anomaly_f1": 0.0,
+            "exact_anomaly_math": 0.0,
+            "net_spend_exact": False,
+        }
+
+    truth_cats = {
+        _norm_str(item["txn_id"]): _norm_str(item["category"])
+        for item in truth["categories"]
+    }
+    pred_cats: dict[str, str] = {}
+    if isinstance(pred.get("categories"), list):
+        for item in pred["categories"]:
+            if not isinstance(item, dict):
+                continue
+            tid = _norm_str(item.get("txn_id"))
+            cat = _norm_str(item.get("category"))
+            if tid and cat:
+                pred_cats[tid] = cat
+
+    matched_cats = sum(1 for tid, cat in truth_cats.items() if pred_cats.get(tid) == cat)
+    cat_acc = round(matched_cats / len(truth_cats), 4) if truth_cats else 1.0
+
+    truth_anoms = {
+        (_norm_str(a["type"]), tuple(sorted(_norm_str(t) for t in a["txn_ids"]))): float(a["amount_usd"])
+        for a in truth["anomalies"]
+    }
+    pred_anoms: dict[tuple[str, tuple[str, ...]], float] = {}
+    if isinstance(pred.get("anomalies"), list):
+        for a in pred["anomalies"]:
+            if not isinstance(a, dict):
+                continue
+            atype = _norm_str(a.get("type"))
+            tids = a.get("txn_ids")
+            amt = _safe_float(a.get("amount_usd"))
+            if atype and isinstance(tids, list) and len(tids) == 2:
+                key = (atype, tuple(sorted(_norm_str(t) for t in tids)))
+                pred_anoms[key] = abs(amt) if amt is not None else float("nan")
+
+    tp_anoms = set(truth_anoms) & set(pred_anoms)
+    anom_f1, anom_prec, anom_rec = _f1(len(tp_anoms), len(pred_anoms), len(truth_anoms))
+    exact_anom_math = sum(1 for k in tp_anoms if abs(pred_anoms[k] - truth_anoms[k]) <= 0.02)
+    anom_math_acc = round(exact_anom_math / len(truth_anoms), 4) if truth_anoms else 1.0
+
+    pred_net = _safe_float(pred.get("net_spend_usd"))
+    truth_net = float(truth["net_spend_usd"])
+    net_exact = pred_net is not None and abs(pred_net - truth_net) <= 0.02
+
+    # 50% categorization (where messy merchant strings require an SLM) +
+    # 20% anomaly pair detection + 15% exact anomaly amount + 15% exact net spend
+    score = round(
+        0.50 * cat_acc
+        + 0.20 * anom_f1
+        + 0.15 * anom_math_acc
+        + 0.15 * (1.0 if net_exact else 0.0),
+        4,
+    )
+    return {
+        "score": score,
+        "category_accuracy": cat_acc,
+        "categories_matched": matched_cats,
+        "categories_total": len(truth_cats),
+        "anomaly_f1": anom_f1,
+        "anomaly_precision": anom_prec,
+        "anomaly_recall": anom_rec,
+        "exact_anomaly_math": anom_math_acc,
+        "net_spend_exact": net_exact,
+        "net_spend_err_usd": round(abs(pred_net - truth_net), 2) if pred_net is not None else None,
+    }
+
+
 def score_case(task: str, raw_output: str, ground_truth: dict[str, Any]) -> dict[str, Any]:
     parsed, json_valid = extract_json_object(raw_output)
     scorers = {
@@ -240,6 +315,7 @@ def score_case(task: str, raw_output: str, ground_truth: dict[str, Any]) -> dict
         "note_to_json": score_note_to_json,
         "doc_contradictions": score_doc_contradictions,
         "context_cliff": score_context_cliff,
+        "bank_statement": score_bank_statement,
     }
     if task not in scorers:
         raise ValueError(f"No verifier for task '{task}'")
