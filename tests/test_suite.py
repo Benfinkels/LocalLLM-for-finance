@@ -14,7 +14,13 @@ from when_not_to_llm.datasets import (
     load_all_cases,
 )
 from when_not_to_llm.finops import compute_call_cost_usd, sanitize_telemetry
-from when_not_to_llm.runner import estimate_dry_run, summarize_results
+from when_not_to_llm.runner import (
+    estimate_dry_run,
+    format_markdown_summary,
+    load_summary_from_file,
+    main as runner_main,
+    summarize_results,
+)
 from when_not_to_llm.tiers import (
     TierResult,
     parse_english_amount,
@@ -209,3 +215,122 @@ def test_committed_results_have_no_private_ips() -> None:
         assert "AIzaSy" not in txt, f"Google API key pattern leaked in {p}"
         assert "sk-ant-" not in txt, f"Anthropic API key pattern leaked in {p}"
         assert "sk-proj-" not in txt, f"OpenAI API key pattern leaked in {p}"
+
+
+def test_format_markdown_summary_synthetic_and_committed_results() -> None:
+    synthetic_summary = summarize_results(
+        [
+            {
+                "tier": "deterministic",
+                "task": "log_triage",
+                "score": 1.0,
+                "latency_ms": 0.25,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cost_usd": 0.0,
+            },
+            {
+                "tier": "deterministic",
+                "task": "finance_reconcile",
+                "score": 0.75,
+                "latency_ms": 0.40,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cost_usd": 0.0,
+            },
+            {
+                "tier": "hybrid",
+                "task": "log_triage",
+                "score": 1.0,
+                "latency_ms": 0.40,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cost_usd": 0.0,
+            },
+            {
+                "tier": "hybrid",
+                "task": "finance_reconcile",
+                "score": 1.0,
+                "latency_ms": 3200.0,
+                "input_tokens": 180,
+                "output_tokens": 120,
+                "cost_usd": 0.000286,
+            },
+        ]
+    )
+    md = format_markdown_summary(synthetic_summary)
+    lines = md.splitlines()
+    assert len(lines) == 4  # header + align + 2 tiers
+    assert lines[0] == "| Setup | Log Triage | Finance Reconcile | Overall | Median / p95 | Est. Cost / 10k |"
+    assert "Deterministic Python" in lines[2]
+    assert "87.5%" in lines[2]
+    assert "$0.00" in lines[2]
+    assert "Hybrid (Code + Gemma4 + Cloud)" in lines[3]
+    assert "100.0%" in lines[3]
+
+    # Smoke test against the committed benchmark_results.json
+    root = Path(__file__).resolve().parents[1]
+    saved_path = root / "results" / "benchmark_results.json"
+    saved_summary = load_summary_from_file(saved_path)
+    saved_md = format_markdown_summary(saved_summary)
+    saved_lines = saved_md.splitlines()
+    assert len(saved_lines) == 2 + len(saved_summary)
+    col_count = saved_lines[0].count("|")
+    assert all(line.count("|") == col_count for line in saved_lines)
+    assert "Deterministic Python" in saved_md
+    assert "Hybrid (Code + Gemma4 + Cloud)" in saved_md
+    assert "$2.86" in saved_md
+
+
+def test_cli_summarize_and_markdown_format(capsys, tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    saved_path = root / "results" / "benchmark_results.json"
+
+    runner_main(["--summarize", str(saved_path), "--format", "markdown"])
+    out = capsys.readouterr().out
+    assert "| Setup |" in out
+    assert "Deterministic Python" in out
+    assert "$2.86" in out
+
+    # Also works on a records-only JSON file without a precomputed summary
+    records_only = tmp_path / "custom_run.json"
+    records_only.write_text(
+        json.dumps(
+            {
+                "records": [
+                    {
+                        "tier": "deterministic",
+                        "task": "log_triage",
+                        "score": 1.0,
+                        "latency_ms": 0.30,
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cost_usd": 0.0,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    runner_main(["--summarize", str(records_only), "--format", "markdown"])
+    custom_out = capsys.readouterr().out
+    assert "| Setup | Log Triage | Overall | Median / p95 | Est. Cost / 10k |" in custom_out
+    assert "Deterministic Python" in custom_out
+
+    # Running a real offline deterministic pass with --format markdown
+    run_out = tmp_path / "det_run.json"
+    runner_main(
+        [
+            "--tiers",
+            "deterministic",
+            "--tasks",
+            "log_triage",
+            "--output",
+            str(run_out),
+            "--format",
+            "markdown",
+        ]
+    )
+    md_out = capsys.readouterr().out
+    assert "| Setup | Log Triage | Overall | Median / p95 | Est. Cost / 10k |" in md_out
+    assert "100.0%" in md_out
