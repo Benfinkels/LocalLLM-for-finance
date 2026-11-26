@@ -116,6 +116,86 @@ def summarize_results(records: list[dict[str, Any]]) -> dict[str, Any]:
     return tier_summary
 
 
+_TASK_LABELS = {
+    "log_triage": "Log Triage",
+    "finance_reconcile": "Finance Reconcile",
+    "note_to_json": "Note -> JSON",
+    "doc_contradictions": "Doc Contradictions",
+    "bank_statement": "Bank Statement",
+}
+
+
+def _format_latency(ms: float) -> str:
+    if ms >= 1000.0:
+        return f"{ms / 1000.0:.1f} s"
+    if ms < 1.0:
+        return f"{ms:.2f} ms"
+    return f"{ms:.1f} ms"
+
+
+def _format_pct(val: float | None) -> str:
+    if val is None:
+        return "—"
+    return f"{val * 100.0:.1f}%"
+
+
+def format_markdown_summary(summary: dict[str, Any]) -> str:
+    """Render a benchmark summary dict as a GitHub-flavored Markdown table (stdlib only)."""
+    if not summary:
+        return "| Setup | Overall | Median / p95 | Est. Cost / 10k |\n| :--- | :---: | :---: | :---: |"
+
+    catalog_order = list(PRICING_CATALOG.keys())
+    known_tasks = list(_TASK_LABELS.keys())
+
+    discovered_tasks: set[str] = set()
+    for info in summary.values():
+        for task in info.get("task_accuracy", {}):
+            if task != "context_cliff":
+                discovered_tasks.add(task)
+
+    ordered_tasks = [t for t in known_tasks if t in discovered_tasks] + sorted(
+        t for t in discovered_tasks if t not in _TASK_LABELS
+    )
+    ordered_tiers = [t for t in catalog_order if t in summary] + sorted(
+        t for t in summary if t not in PRICING_CATALOG
+    )
+
+    headers = (
+        ["Setup"]
+        + [_TASK_LABELS.get(t, t.replace("_", " ").title()) for t in ordered_tasks]
+        + ["Overall", "Median / p95", "Est. Cost / 10k"]
+    )
+    align = [":---"] + [":---:"] * (len(headers) - 1)
+
+    lines = [
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join(align) + " |",
+    ]
+    for tier in ordered_tiers:
+        info = summary[tier]
+        name = str(info.get("display_name") or tier).replace("|", "\\|")
+        task_acc = info.get("task_accuracy", {})
+        task_cells = [_format_pct(task_acc.get(t)) for t in ordered_tasks]
+        overall = _format_pct(info.get("macro_core_accuracy"))
+        p50 = _format_latency(float(info.get("p50_latency_ms", 0.0)))
+        p95 = _format_latency(float(info.get("p95_latency_ms", 0.0)))
+        cost = f"${float(info.get('cost_per_10k_tasks_usd', 0.0)):.2f}"
+        row = [name] + task_cells + [overall, f"{p50} / {p95}", cost]
+        lines.append("| " + " | ".join(row) + " |")
+    return "\n".join(lines)
+
+
+def load_summary_from_file(path: str | Path) -> dict[str, Any]:
+    """Load summary data from a saved benchmark results JSON file."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(data, dict):
+        if isinstance(data.get("summary"), dict) and data["summary"]:
+            return data["summary"]
+        if isinstance(data.get("records"), list):
+            return summarize_results(data["records"])
+    raise ValueError(f"Expected benchmark JSON with 'summary' or 'records' in {path}")
+
+
 def build_clients(args: argparse.Namespace) -> dict[str, Any]:
     clients: dict[str, Any] = {}
     if "phi4_mini" in args.tiers:
@@ -341,6 +421,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=["log_triage", "finance_reconcile", "note_to_json", "doc_contradictions", "context_cliff"],
     )
     ap.add_argument("--output", default="results/benchmark_results.json")
+    ap.add_argument(
+        "--format",
+        choices=["json", "markdown"],
+        default="json",
+        help="Output format for printed summary (json or markdown table).",
+    )
+    ap.add_argument(
+        "--summarize",
+        nargs="?",
+        const="results/benchmark_results.json",
+        default=None,
+        metavar="PATH",
+        help="Summarize an existing benchmark results JSON file without running models.",
+    )
     ap.add_argument("--resume", action="store_true", help="Resume from existing output JSON checkpoint.")
     ap.add_argument("--dry-run", action="store_true", help="Print token/cost estimates without making API calls.")
     ap.add_argument("--max-cost-usd", type=float, default=2.0, help="Hard cap on API spend before stopping.")
@@ -370,9 +464,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    if args.summarize is not None:
+        summary = load_summary_from_file(args.summarize)
+        if args.format == "markdown":
+            print(format_markdown_summary(summary))
+        else:
+            print(json.dumps(summary, indent=2))
+        return
+
     res = run_benchmark(args)
     if not args.dry_run:
-        print(json.dumps(res["summary"], indent=2))
+        if args.format == "markdown":
+            print(format_markdown_summary(res["summary"]))
+        else:
+            print(json.dumps(res["summary"], indent=2))
 
 
 if __name__ == "__main__":
